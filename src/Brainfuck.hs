@@ -25,25 +25,35 @@ data Interaction = NoInteraction | Request | Offer | Termination
  - -}
 data Context = Context ProgramMemory DataMemory Interaction
 
-skipAhead :: String -> (String,String)
-skipAhead [] = ([],[])
-skipAhead str = skipAhead' str "" 1
-    where skipAhead' "" bhd _ = ("",bhd)
-          skipAhead' ahd bhd 0 = (ahd,bhd)
-          skipAhead' (']':ahd) bhd 1 = (ahd,(']':bhd))
-          skipAhead' (']':ahd) bhd n = skipAhead' ahd (']':bhd) (n-1)
-          skipAhead' ('[':ahd) bhd n = skipAhead' ahd ('[':bhd) (n+1)
-          skipAhead' (a:ahd) bhd n = skipAhead' ahd (a:bhd) n
+{- Execution Order helper function -}
+convert :: (Integral a) => Char -> a
+convert '[' = 1
+convert ']' = (-1)
+convert _ = 0
 
-skipBack :: String -> (String,String)
-skipBack [] = ([],[])
-skipBack str = skipBack' str "" 1
-    where skipBack' "" bhd _ = ("",bhd)
-          skipBack' ahd bhd 0 = (ahd,bhd)
-          skipBack' ('[':ahd) bhd 1 = (ahd,'[':bhd)
-          skipBack' ('[':ahd) bhd n = skipBack' ahd ('[':bhd) (n-1)
-          skipBack' (']':ahd) bhd n = skipBack' ahd (']':bhd) (n+1)
-          skipBack' (a:ahd) bhd n = skipBack' ahd (a:bhd) n
+{- Skip ahead to matching closed brackets -}
+skipAhead :: ProgramMemory -> ProgramMemory
+skipAhead (BidirectionalTape [] bhd) = BidirectionalTape [] bhd
+skipAhead (BidirectionalTape ahd bhd) = BidirectionalTape newAhead newBehind
+    where valuedAhead = map convert ahd
+          paths = map (\n -> (sum (take n valuedAhead),n)) [1..]
+          length = snd $ head $ dropWhile (\(x,_) -> x /= 0) paths
+          newAhead = drop length ahd
+          leftBehind = reverse $ take length ahd
+          newBehind = leftBehind ++ bhd
+          
+{- Skip back to matching opening brackets -}
+skipBack :: ProgramMemory -> ProgramMemory
+skipBack (BidirectionalTape ahd []) = BidirectionalTape ahd []
+skipBack (BidirectionalTape ahd bhd) = BidirectionalTape newAhead newBehind
+    where valuedBehind = map convert bhd
+          paths = map (\n -> (sum (take n valuedBehind),n)) [1..]
+          length = snd $ head $ dropWhile (\(x,_) -> x /= 1) paths
+          newBehind = drop length bhd
+          sentAhead = reverse $ take length bhd
+          newAhead = sentAhead ++ ahd
+-- Pitfall: It has to have a net balance of 1 rather than 0 because the head
+--      of the Ahead list is the current program counter
 
 {- The brain of the operation -}
 brainfuck :: Context -> Context
@@ -90,13 +100,11 @@ brainfuck (Context (BidirectionalTape ('-':ahead) behind) (BidirectionalTape (da
 ---- Program Tape Operations
 -- Skip Ahead
     -- When there's no data tape ahead
-brainfuck (Context (BidirectionalTape ('[':ahead) behind) dataTape@(BidirectionalTape [] _) _) =
-    Context (BidirectionalTape (fst skipped) ((snd skipped) ++ ('[':behind))) dataTape NoInteraction
-        where skipped = skipAhead ahead
+brainfuck (Context programTape@(BidirectionalTape ('[':_) _) dataTape@(BidirectionalTape [] _) _) =
+    Context (skipAhead programTape) dataTape NoInteraction
     -- When the data's zero
-brainfuck (Context (BidirectionalTape ('[':ahead) behind) dataTape@(BidirectionalTape (0:_) _) _) =
-    Context (BidirectionalTape (fst skipped) ((snd skipped) ++ ('[':behind))) dataTape NoInteraction
-        where skipped = skipAhead ahead
+brainfuck (Context programTape@(BidirectionalTape ('[':_) _) dataTape@(BidirectionalTape (0:_) _) _) =
+    Context (skipAhead programTape) dataTape NoInteraction
     -- Otherwise
 brainfuck (Context (BidirectionalTape ('[':ahead) behind) dataTape _) =
     Context (BidirectionalTape ahead ('[':behind)) dataTape NoInteraction
@@ -108,9 +116,8 @@ brainfuck (Context (BidirectionalTape (']':ahead) behind) dataTape@(Bidirectiona
 brainfuck (Context (BidirectionalTape (']':ahead) behind) dataTape@(BidirectionalTape (0:_) _) _) =
     Context (BidirectionalTape ahead (']':behind)) dataTape NoInteraction
     -- Otherwise
-brainfuck (Context (BidirectionalTape (']':ahead) behind) dataTape _) =
-    Context (BidirectionalTape ((snd skipped) ++ (']':ahead)) (fst skipped)) dataTape NoInteraction
-        where skipped = skipBack behind
+brainfuck (Context programTape@(BidirectionalTape (']':_) _) dataTape _) =
+    Context (skipBack programTape) dataTape NoInteraction
 
 ---- IO Operations
     {- IO Operations require impure intervention from the IO side of the interpreter -}
@@ -164,11 +171,15 @@ loop state = do
           noInteraction (Context _ _ NoInteraction) = True
           noInteraction _ = False
 
+{- Read CLI arguments -}
 runBrainfuck :: IO ()
 runBrainfuck = do
+    -- No buffering, so IO works correctly
     hSetBuffering stdout NoBuffering
     args <- getArgs
+    -- If there are no arguments, or if there are too many, program fails
     when (length args /= 1) exitFailure
+    -- Read forward program tape
     program <- readFile (args!!0)
     let initialState = Context (BidirectionalTape program []) (BidirectionalTape [] []) NoInteraction
     loop initialState
