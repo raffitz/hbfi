@@ -2,6 +2,7 @@ module Brainfuck
     ( runBrainfuck
     ) where
 
+import System.IO
 import System.Exit
 import System.Environment
 import Data.Char
@@ -165,6 +166,7 @@ loop state = do
 
 runBrainfuck :: IO ()
 runBrainfuck = do
+    hSetBuffering stdout NoBuffering
     args <- getArgs
     when (length args /= 1) exitFailure
     program <- readFile (args!!0)
