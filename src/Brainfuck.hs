@@ -7,12 +7,21 @@ import System.Environment
 import Data.Char
 import Control.Monad
 
+{- Bidirectional tapes have a list of what's ahead and a list of what's behind -}
 data BidirectionalTape a = BidirectionalTape [a] [a]
+{- Program memory is a bidirectional tape made of characters -}
 type ProgramMemory = BidirectionalTape Char
+{- Data memory is a bidirectional tape made of integers -}
 type DataMemory = BidirectionalTape Integer
 
+{- Interactions specify the IO of a single cycle.
+ - They comprise the impure part of the interpreter.
+ - -}
 data Interaction = NoInteraction | Request | Offer
 
+{- Context specifies each state of the interpreter.
+ - It contains the Program Memory, the Data Memory, as well as the IO descriptor.
+ - -}
 data Context = Context ProgramMemory DataMemory Interaction
 
 skipAhead :: String -> (String,String)
