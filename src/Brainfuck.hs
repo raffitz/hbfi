@@ -1,6 +1,6 @@
-module Lib
-    ( someFunc
+module Brainfuck
+    ( runBrainfuck
     ) where
 
-someFunc :: IO ()
-someFunc = putStrLn "someFunc"
+runBrainfuck :: IO ()
+runBrainfuck = putStrLn "running brainfuck"
