@@ -7,6 +7,14 @@ import System.Environment
 import Data.Char
 import Control.Monad
 
+data BidirectionalTape a = BidirectionalTape [a] [a]
+type ProgramMemory = BidirectionalTape Char
+type DataMemory = BidirectionalTape Integer
+
+data Interaction = NoInteraction | Request | Offer
+
+data Context = Context ProgramMemory DataMemory Interaction
+
 skipAhead :: String -> (String,String)
 skipAhead [] = ([],[])
 skipAhead str = skipAhead' str "" 1
