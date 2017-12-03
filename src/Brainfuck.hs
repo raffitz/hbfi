@@ -17,7 +17,7 @@ type DataMemory = BidirectionalTape Integer
 {- Interactions specify the IO of a single cycle.
  - They comprise the impure part of the interpreter.
  - -}
-data Interaction = NoInteraction | Request | Offer
+data Interaction = NoInteraction | Request | Offer | Termination
 
 {- Context specifies each state of the interpreter.
  - It contains the Program Memory, the Data Memory, as well as the IO descriptor.
@@ -44,49 +44,129 @@ skipBack str = skipBack' str "" 1
           skipBack' (']':ahd) bhd n = skipBack' ahd (']':bhd) (n+1)
           skipBack' (a:ahd) bhd n = skipBack' ahd (a:bhd) n
 
-brainfuck :: Integral a => (String,String,[a],[a],Maybe (Maybe Char)) -> (String,String,[a],[a],Maybe (Maybe Char))
-brainfuck state@([],behind,memAhead,memBehind,io)=state
-brainfuck (('>':ahead),behind,[],memBehind,_) = (ahead,'>':behind,[],0:memBehind,Just Nothing)
-brainfuck (('>':ahead),behind,cell:memAhead,memBehind,_) = (ahead,'>':behind,memAhead,cell:memBehind,Just Nothing)
-brainfuck (('<':ahead),behind,memAhead,[],_) = (ahead,'<':behind,0:memAhead,[],Just Nothing)
-brainfuck (('<':ahead),behind,memAhead,cell:memBehind,_) = (ahead,'<':behind,cell:memAhead,memBehind,Just Nothing)
-brainfuck (('+':ahead),behind,[],memBehind,_) = (ahead,'+':behind,[1],memBehind,Just Nothing)
-brainfuck (('+':ahead),behind,cell:memAhead,memBehind,_) = (ahead,'+':behind,(cell + 1):memAhead,memBehind,Just Nothing)
-brainfuck (('-':ahead),behind,[],memBehind,_) = (ahead,'-':behind,[(-1)],memBehind,Just Nothing)
-brainfuck (('-':ahead),behind,cell:memAhead,memBehind,_) = (ahead,'-':behind,(cell - 1):memAhead,memBehind,Just Nothing)
-brainfuck (('.':ahead),behind,[],memBehind,_) = (ahead,'.':behind,[],memBehind,Just (Just (chr 0)))
-brainfuck (('.':ahead),behind,cell:memAhead,memBehind,_) = (ahead,'.':behind,cell:memAhead,memBehind,Just (Just (chr (fromIntegral cell))))
-brainfuck ((',':ahead),behind,[],memBehind,Just (Just char)) = (ahead,',':behind,[(fromIntegral (ord char))],memBehind,Just Nothing)
-brainfuck ((',':ahead),behind,_:memAhead,memBehind,Just (Just char)) = (ahead,',':behind,(fromIntegral (ord char)):memAhead,memBehind,Just Nothing)
-brainfuck ((',':ahead),behind,memAhead,memBehind,_) = (',':ahead,behind,memAhead,memBehind,Nothing)
-brainfuck (('[':ahead),behind,[],memBehind,_) = (fst skipped,(snd skipped) ++ ('[':behind),[],memBehind,Just Nothing)
-    where skipped = skipAhead ahead
-brainfuck (('[':ahead),behind,0:memAhead,memBehind,_) = (fst skipped,(snd skipped) ++ ('[':behind),0:memAhead,memBehind,Just Nothing)
-    where skipped = skipAhead ahead
-brainfuck (('[':ahead),behind,memAhead,memBehind,_) = (ahead,'[':behind,memAhead,memBehind,Just Nothing)
-brainfuck ((']':ahead),behind,[],memBehind,io) = (ahead,']':behind,[],memBehind,Just Nothing)
-brainfuck ((']':ahead),behind,0:memAhead,memBehind,io) = (ahead,']':behind,0:memAhead,memBehind,Just Nothing)
-brainfuck ((']':ahead),behind,memAhead,memBehind,io) = ((snd skipped) ++ (']':ahead),fst skipped,memAhead,memBehind,Just Nothing)
-    where skipped = skipBack behind
-brainfuck ((x:ahead),behind,memAhead,memBehind,io) = (ahead,x:behind,memAhead,memBehind,Just Nothing)
+{- The brain of the operation -}
+brainfuck :: Context -> Context
 
-loop :: Integral a => (String,String,[a],[a],Maybe (Maybe Char)) -> IO ()
-loop ([],_,_,_,_) = return ()
-loop (ahead,behind,memAhead,memBehind,Nothing) = do
-    char <- getChar
-    let state = brainfuck (ahead,behind,memAhead,memBehind,Just (Just char))
-    loop state
-loop (ahead,behind,memAhead,memBehind,Just (Just char)) = do
-    putChar char
-    let state = brainfuck (ahead,behind,memAhead,memBehind,Just Nothing)
-    loop state
+-- Code terminated
+brainfuck state@(Context _ _ Termination) = state
+-- IO data to be processed
+brainfuck state@(Context _ _ Request) = state
+brainfuck state@(Context _ _ Offer) = state
+-- No more instructions in program tape
+brainfuck (Context programTape@(BidirectionalTape [] _) dataTape _) =
+    Context programTape dataTape Termination
+
+---- Regular Data Tape operations
+-- Move Data Tape ahead
+    -- When there's no data tape ahead
+brainfuck (Context (BidirectionalTape ('>':ahead) behind) (BidirectionalTape [] dataBehind) _) =
+    Context (BidirectionalTape ahead ('>':behind)) (BidirectionalTape [] (0:dataBehind)) NoInteraction
+    -- Otherwise
+brainfuck (Context (BidirectionalTape ('>':ahead) behind) (BidirectionalTape (dataCell:dataAhead) dataBehind) _) =
+    Context (BidirectionalTape ahead ('>':behind)) (BidirectionalTape dataAhead (dataCell:dataBehind)) NoInteraction
+-- Move Data Tape behind
+    -- When there's no data tape behind
+brainfuck (Context (BidirectionalTape ('<':ahead) behind) (BidirectionalTape dataAhead []) _) =
+    Context (BidirectionalTape ahead ('<':behind)) (BidirectionalTape (0:dataAhead) []) NoInteraction
+    -- Otherwise
+brainfuck (Context (BidirectionalTape ('<':ahead) behind) (BidirectionalTape dataAhead (dataCell:dataBehind)) _) =
+    Context (BidirectionalTape ahead ('<':behind)) (BidirectionalTape (dataCell:dataAhead) dataBehind) NoInteraction
+-- Increment Data Cell
+    -- When there's no data tape ahead
+brainfuck (Context (BidirectionalTape ('+':ahead) behind) (BidirectionalTape [] dataBehind) _) =
+    Context (BidirectionalTape ahead ('+':behind)) (BidirectionalTape [1] dataBehind) NoInteraction
+    -- Otherwise
+brainfuck (Context (BidirectionalTape ('+':ahead) behind) (BidirectionalTape (dataCell:dataAhead) dataBehind) _) =
+    Context (BidirectionalTape ahead ('+':behind)) (BidirectionalTape ((dataCell + 1):dataAhead) dataBehind) NoInteraction
+-- Decrement Data Cell
+    -- When there's no data tape ahead
+brainfuck (Context (BidirectionalTape ('-':ahead) behind) (BidirectionalTape [] dataBehind) _) =
+    Context (BidirectionalTape ahead ('-':behind)) (BidirectionalTape [(-1)] dataBehind) NoInteraction
+    -- Otherwise
+brainfuck (Context (BidirectionalTape ('-':ahead) behind) (BidirectionalTape (dataCell:dataAhead) dataBehind) _) =
+    Context (BidirectionalTape ahead ('-':behind)) (BidirectionalTape ((dataCell - 1):dataAhead) dataBehind) NoInteraction
+
+---- Program Tape Operations
+-- Skip Ahead
+    -- When there's no data tape ahead
+brainfuck (Context (BidirectionalTape ('[':ahead) behind) dataTape@(BidirectionalTape [] _) _) =
+    Context (BidirectionalTape (fst skipped) ((snd skipped) ++ ('[':behind))) dataTape NoInteraction
+        where skipped = skipAhead ahead
+    -- When the data's zero
+brainfuck (Context (BidirectionalTape ('[':ahead) behind) dataTape@(BidirectionalTape (0:_) _) _) =
+    Context (BidirectionalTape (fst skipped) ((snd skipped) ++ ('[':behind))) dataTape NoInteraction
+        where skipped = skipAhead ahead
+    -- Otherwise
+brainfuck (Context (BidirectionalTape ('[':ahead) behind) dataTape _) =
+    Context (BidirectionalTape ahead ('[':behind)) dataTape NoInteraction
+-- Skip Back
+    -- When there's no data tape ahead
+brainfuck (Context (BidirectionalTape (']':ahead) behind) dataTape@(BidirectionalTape [] _) _) =
+    Context (BidirectionalTape ahead (']':behind)) dataTape NoInteraction
+    -- When the data's zero
+brainfuck (Context (BidirectionalTape (']':ahead) behind) dataTape@(BidirectionalTape (0:_) _) _) =
+    Context (BidirectionalTape ahead (']':behind)) dataTape NoInteraction
+    -- Otherwise
+brainfuck (Context (BidirectionalTape (']':ahead) behind) dataTape _) =
+    Context (BidirectionalTape ((snd skipped) ++ (']':ahead)) (fst skipped)) dataTape NoInteraction
+        where skipped = skipBack behind
+
+---- IO Operations
+    {- IO Operations require impure intervention from the IO side of the interpreter -}
+-- Output
+brainfuck (Context (BidirectionalTape ('.':ahead) behind) dataTape _) =
+    Context (BidirectionalTape ahead ('.':behind)) dataTape Offer
+-- Input
+brainfuck (Context (BidirectionalTape (',':ahead) behind) dataTape _) =
+    Context (BidirectionalTape ahead (',':behind)) dataTape Request
+
+---- Comments
+    {- All code that is not part of the instruction set is considered a comment -}
+brainfuck (Context (BidirectionalTape (nop:ahead) behind) dataTape _) =
+    Context (BidirectionalTape ahead (nop:behind)) dataTape NoInteraction
+
+
+{- Impure handling of the loop -}
+loop :: Context -> IO ()
+-- When program has terminated, quit
+loop state@(Context _ _ Termination) = return ()
+---- IO data to be processed
+-- data request
+    -- When there's no data tape ahead
+loop (Context programTape (BidirectionalTape [] behind) Request) = do
+    input <- getChar
+    let nextState = Context programTape (BidirectionalTape ((fromIntegral (ord input)):[]) behind) NoInteraction
+    loop nextState
+    -- Otherwise
+loop (Context programTape (BidirectionalTape (_:ahead) behind) Request) = do
+    input <- getChar
+    let nextState = Context programTape (BidirectionalTape ((fromIntegral (ord input)):ahead) behind) NoInteraction
+    loop nextState
+-- data request
+    -- When there's no data tape ahead
+loop (Context programTape dataTape@(BidirectionalTape [] _) Offer) = do
+    let output = chr 0
+    putChar output
+    let nextState = Context programTape dataTape NoInteraction
+    loop nextState
+    -- Otherwise
+loop (Context programTape dataTape@(BidirectionalTape (c:_) _) Offer) = do
+    let output = chr $ fromIntegral c
+    putChar output
+    let nextState = Context programTape dataTape NoInteraction
+    loop nextState
+---- Regular execution
 loop state = do
-    let newstate = brainfuck state
-    loop newstate
+    let nextState = head $ dropWhile noInteraction $ iterate brainfuck state
+    loop nextState
+    where noInteraction :: Context -> Bool
+          noInteraction (Context _ _ NoInteraction) = True
+          noInteraction _ = False
 
 runBrainfuck :: IO ()
 runBrainfuck = do
     args <- getArgs
     when (length args /= 1) exitFailure
     program <- readFile (args!!0)
-    loop (program,"",[],[],Just Nothing)
+    let initialState = Context (BidirectionalTape program []) (BidirectionalTape [] []) NoInteraction
+    loop initialState
